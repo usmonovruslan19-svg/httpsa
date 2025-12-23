@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Учёт картриджей — Склад</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  :root{
+    --bg:#071227; --panel:#0d1b2b; --card:#12283a; --text:#eaf6ff; --muted:#98adbf;
+    --accent:#6be3ff; --danger:#ff7b7b; --success:#7cffb0; --radius:12px; --shadow:0 18px 50px rgba(2,6,23,0.6);
+    font-family:Inter, system-ui, -apple-system, sans-serif; font-size:15px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,var(--bg),#031026);color:var(--text)}
+  
+  /* 1. АВТОРИЗАЦИЯ */
+  .login-screen{position:fixed;inset:0;background:var(--bg);z-index:2000;display:flex;align-items:center;justify-content:center;flex-direction:column}
+  .login-card{width:320px;background:var(--panel);padding:24px;border-radius:var(--radius);box-shadow:var(--shadow);text-align:center}
+
+  /* ОСНОВНОЙ ИНТЕРФЕЙС */
+  .app{width:100vw;height:100vh;display:none;grid-template-columns:260px 1fr;gap:18px;padding:18px} 
+  @media(max-width:1000px){ .app{grid-template-columns:1fr;padding:12px;display:none;flex-direction:column} .sidebar{display:none} }
+
+  .sidebar{background:linear-gradient(180deg,var(--panel), rgba(255,255,255,0.02));padding:16px;border-radius:var(--radius);box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+  .nav button{background:transparent;border:0;color:var(--muted);padding:10px;border-radius:8px;text-align:left;cursor:pointer;font-weight:600;width:100%;transition:0.2s}
+  .nav button:hover{background:rgba(255,255,255,0.02)}
+  .nav button.active{background:rgba(255,255,255,0.05);color:var(--text);border-left:3px solid var(--accent)}
+
+  .main{display:flex;flex-direction:column;gap:12px;overflow:hidden;flex:1}
+  .panel{background:linear-gradient(180deg,var(--card), rgba(255,255,255,0.01));padding:14px;border-radius:12px;box-shadow:var(--shadow);overflow:auto;flex:1}
+  
+  .table{width:100%;border-collapse:collapse}
+  .table th{color:var(--muted);font-weight:600;font-size:13px;padding-bottom:8px;text-align:left}
+  .table td{padding:10px 6px;border-bottom:1px solid rgba(255,255,255,0.03);vertical-align:middle}
+  
+  .btn{background:linear-gradient(90deg,var(--accent),var(--success));border:0;color:#042026;padding:8px 14px;border-radius:8px;font-weight:700;cursor:pointer;font-size:13px}
+  .btn:hover{opacity:0.9}
+  .btn.ghost{background:transparent;border:1px solid rgba(255,255,255,0.1);color:var(--muted)}
+  .btn.ghost:hover{background:rgba(255,255,255,0.05);color:var(--text)}
+  .btn.sm{padding:4px 8px;font-size:12px}
+  
+  .stock-badge{background:var(--panel);padding:2px 8px;border-radius:4px;border:1px solid rgba(255,255,255,0.1);font-size:12px;color:var(--accent);display:inline-block;margin:2px}
+
+  /* МОДАЛЬНЫЕ ОКНА */
+  .modal-root{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(2,6,23,0.8);z-index:1400;backdrop-filter:blur(4px)}
+  .modal{width:500px;max-width:96%;background:var(--card);padding:24px;border-radius:16px;color:var(--text);box-shadow:var(--shadow);border:1px solid rgba(255,255,255,0.05)}
+  input,select,textarea{width:100%;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.1);background:rgba(0,0,0,0.2);color:var(--text);outline:none;margin-bottom:12px;font-family:inherit}
+  label{display:block;margin-bottom:6px;font-size:13px;color:var(--muted)}
+
+  .toast{position:fixed;right:20px;bottom:20px;background:#1e3a56;padding:12px 18px;border-radius:10px;z-index:1500;border-left:4px solid var(--accent)}
+</style>
+</head>
+<body>
+
+<div class="login-screen" id="loginScreen">
+  <div style="font-weight:800;font-size:24px;margin-bottom:20px;color:var(--accent)">Склад Картриджей</div>
+  <div class="login-card">
+    <input id="loginUser" placeholder="Логин (admin)">
+    <input id="loginPass" type="password" placeholder="Пароль (admin)">
+    <button onclick="tryLogin()" class="btn" style="width:100%;margin-top:8px">Войти</button>
+    <div id="loginError" style="color:var(--danger);font-size:13px;margin-top:12px;display:none">Неверные данные</div>
+  </div>
+</div>
+
+<div class="app" id="app">
+  <aside class="sidebar">
+    <div style="font-weight:800;padding:0 10px;margin-bottom:20px;font-size:18px">Меню</div>
+    <nav class="nav">
+      <button onclick="switchView('cartridges')" class="active" data-view="cartridges">🖨 Склад и Модели</button>
+      <button onclick="switchView('users')" id="btnUsersNav" style="display:none" data-view="users">👥 Пользователи</button>
+      <button onclick="switchView('logs')" data-view="logs">📋 Журнал</button>
+    </nav>
+    <div style="margin-top:auto;padding:10px">
+      <div class="small" style="color:var(--muted)">Вы вошли как:</div>
+      <div style="font-weight:700" id="currentUserLabel">...</div>
+      <button onclick="logout()" class="btn ghost sm" style="width:100%;margin-top:10px">Выйти</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h2 style="margin:0" id="pageTitle">Склад</h2>
+      <div style="display:flex;gap:10px">
+        <input id="searchBox" placeholder="Поиск..." style="width:200px;margin:0;padding:8px">
+      </div>
+    </div>
+
+    <div id="mainContent" class="panel">
+      </div>
+  </main>
+</div>
+
+<div id="modalRoot" class="modal-root">
+  <div class="modal">
+    <h3 id="modalTitle" style="margin-top:0">Заголовок</h3>
+    <div id="modalBody"></div>
+    <div style="text-align:right;margin-top:20px;display:flex;justify-content:flex-end;gap:12px">
+      <button onclick="closeModal()" class="btn ghost">Отмена</button>
+      <button id="modalOkBtn" class="btn">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div id="toastArea"></div>
+
+<script>
+/* --- ДАННЫЕ И НАСТРОЙКИ --- */
+// Используем v2 чтобы очистить старые данные, так как список зданий изменился
+const LS_KEYS = { USERS:'u_db_v2', CARTS:'c_db_v2', LOGS:'l_db_v2' };
+
+// ВАШ СПИСОК КОРПУСОВ:
+const BUILDINGS_LIST = ['М7', 'С1', 'Н6', 'Н8', 'С12', 'Пм122', 'Пм112', 'М7-1', 'К2-5']; 
+
+// Исходные данные
+let users = JSON.parse(localStorage.getItem(LS_KEYS.USERS)) || [{id:1, login:'admin', pass:'admin', name:'Главный Админ', role:'admin'}];
+let cartridges = JSON.parse(localStorage.getItem(LS_KEYS.CARTS)) || [];
+let logs = JSON.parse(localStorage.getItem(LS_KEYS.LOGS)) || [];
+let currentUser = null;
+
+/* --- ЛОГИКА АВТОРИЗАЦИИ --- */
+function tryLogin(){
+  const l = document.getElementById('loginUser').value.trim();
+  const p = document.getElementById('loginPass').value.trim();
+  const found = users.find(u => u.login === l && u.pass === p);
+  
+  if(found){
+    currentUser = found;
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('app').style.display = 'grid'; 
+    document.getElementById('currentUserLabel').textContent = found.name + (found.role==='admin'?' (A)':'');
+    
+    // Админка
+    if(found.role === 'admin') document.getElementById('btnUsersNav').style.display = 'block';
+    
+    switchView('cartridges');
+  } else {
+    document.getElementById('loginError').style.display = 'block';
+  }
+}
+function logout(){ location.reload(); }
+
+/* --- НАВИГАЦИЯ --- */
+function switchView(view){
+  document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+  document.querySelector(`[data-view="${view}"]`).classList.add('active');
+  
+  const content = document.getElementById('mainContent');
+  const title = document.getElementById('pageTitle');
+  content.innerHTML = '';
+
+  if(view === 'cartridges') {
+    title.textContent = 'Склад и Модели';
+    renderCartridges(content);
+  }
+  else if(view === 'users') {
+    title.textContent = 'Управление пользователями';
+    renderUsers(content);
+  }
+  else if(view === 'logs') {
+    title.textContent = 'Журнал операций';
+    renderLogs(content);
+  }
+}
+
+/* --- СКЛАД --- */
+
+function renderCartridges(cont){
+  const toolbar = document.createElement('div');
+  toolbar.innerHTML = `
+    <div style="display:flex;gap:10px;margin-bottom:15px">
+      <button class="btn" onclick="modalNewModel()">+ Новая Модель</button>
+      <button class="btn ghost" onclick="modalIncome()">📥 Оформить ПРИХОД</button>
+    </div>
+  `;
+  cont.appendChild(toolbar);
+
+  const table = document.createElement('table');
+  table.className = 'table';
+  table.innerHTML = `
+    <thead><tr>
+      <th>Модель / Тип</th>
+      <th>Совместимые принтеры</th> 
+      <th>Остатки по корпусам</th>
+      <th style="text-align:right">Всего</th>
+      <th style="text-align:right">Действия</th>
+    </tr></thead>
+    <tbody id="cartBody"></tbody>
+  `;
+  cont.appendChild(table);
+  
+  renderCartRows();
+  document.getElementById('searchBox').oninput = (e) => renderCartRows(e.target.value);
+}
+
+function renderCartRows(filter = ''){
+  const tbody = document.getElementById('cartBody');
+  tbody.innerHTML = '';
+  
+  cartridges.forEach(c => {
+    if(filter && !c.model.toLowerCase().includes(filter.toLowerCase()) && !c.printers.toLowerCase().includes(filter.toLowerCase())) return;
+
+    let total = 0;
+    let stocksHtml = '';
+    for (const [bld, qty] of Object.entries(c.stocks)) {
+      if(qty > 0) {
+        stocksHtml += `<span class="stock-badge">${bld}: ${qty}</span> `;
+        total += qty;
+      }
+    }
+    if(total === 0) stocksHtml = '<span style="opacity:0.5;font-size:12px">Нет на складе</span>';
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>
+        <div style="font-weight:700;color:#fff">${c.model}</div>
+        <div class="small" style="color:var(--muted)">${c.type}</div>
+      </td>
+      <td style="font-size:13px;color:var(--muted)">${c.printers}</td>
+      <td>${stocksHtml}</td>
+      <td style="text-align:right;font-weight:bold;font-size:16px">${total}</td>
+      <td style="text-align:right">
+        <button class="btn ghost sm" title="Списать (Расход)" onclick="modalExpense('${c.id}')">-</button>
+        <button class="btn ghost sm" title="Переместить" onclick="modalTransfer('${c.id}')">⇄</button>
+        <button class="btn ghost sm" title="Редактировать" onclick="modalEditModel('${c.id}')">✎</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+/* --- МОДАЛЬНЫЕ ОКНА --- */
+
+// Новая модель
+function modalNewModel(){
+  showModal('Новая модель картриджа', `
+    <label>Название модели</label><input id="nmName" placeholder="Например: CF283A">
+    <label>Тип</label><select id="nmType"><option>Тонер (Лазерный)</option><option>Чернила</option><option>Барабан</option></select>
+    <label>Принтеры</label><textarea id="nmPrint" placeholder="HP M125, Canon 3010..."></textarea>
+  `, () => {
+    const m = document.getElementById('nmName').value;
+    const t = document.getElementById('nmType').value;
+    const p = document.getElementById('nmPrint').value;
+    if(!m) return alert('Введите название');
+    
+    cartridges.push({ 
+      id: Date.now().toString(), 
+      model: m, 
+      type: t, 
+      printers: p, 
+      stocks: {} 
+    });
+    saveData();
+    renderCartRows();
+    closeModal();
+    toast('Модель создана');
+  });
+}
+
+// Редактирование
+function modalEditModel(id){
+  const c = cartridges.find(x => x.id === id);
+  showModal('Редактировать модель', `
+    <label>Название</label><input id="emName" value="${c.model}">
+    <label>Принтеры</label><textarea id="emPrint">${c.printers}</textarea>
+  `, () => {
+    c.model = document.getElementById('emName').value;
+    c.printers = document.getElementById('emPrint').value;
+    saveData();
+    renderCartRows();
+    closeModal();
+  });
+}
+
+// Приход
+function modalIncome(){
+  if(!cartridges.length) return alert('Сначала создайте модель!');
+  const opts = cartridges.map(c => `<option value="${c.id}">${c.model}</option>`).join('');
+  const bldOpts = BUILDINGS_LIST.map(b => `<option>${b}</option>`).join('');
+
+  showModal('Оформить ПРИХОД', `
+    <label>Выберите картридж</label><select id="incId">${opts}</select>
+    <label>Корпус</label><select id="incBld">${bldOpts}</select>
+    <label>Количество</label><input type="number" id="incQty" value="1" min="1">
+  `, () => {
+    const id = document.getElementById('incId').value;
+    const bld = document.getElementById('incBld').value;
+    const qty = parseInt(document.getElementById('incQty').value);
+    
+    const c = cartridges.find(x => x.id === id);
+    if(!c.stocks[bld]) c.stocks[bld] = 0;
+    c.stocks[bld] += qty;
+    
+    log(`Приход: ${c.model}, ${qty} шт. на ${bld}`);
+    saveData();
+    renderCartRows();
+    closeModal();
+    toast('Приход оформлен');
+  });
+}
+
+// Списание
+function modalExpense(id){
+  const c = cartridges.find(x => x.id === id);
+  const bldOpts = Object.keys(c.stocks).filter(k=>c.stocks[k]>0).map(b => `<option>${b}</option>`).join('');
+  
+  if(!bldOpts) return alert('Нет остатков для списания');
+
+  showModal(`Списание: ${c.model}`, `
+    <label>С какого корпуса списать</label><select id="expBld">${bldOpts}</select>
+    <label>Количество</label><input type="number" id="expQty" value="1" min="1">
+  `, () => {
+    const bld = document.getElementById('expBld').value;
+    const qty = parseInt(document.getElementById('expQty').value);
+    
+    if(c.stocks[bld] < qty) return alert('Недостаточно на остатке');
+    c.stocks[bld] -= qty;
+    
+    log(`Списание: ${c.model}, ${qty} шт. с ${bld}`);
+    saveData();
+    renderCartRows();
+    closeModal();
+  });
+}
+
+// Перемещение
+function modalTransfer(id){
+  const c = cartridges.find(x => x.id === id);
+  const fromOpts = Object.keys(c.stocks).filter(k=>c.stocks[k]>0).map(b => `<option>${b}</option>`).join('');
+  const toOpts = BUILDINGS_LIST.map(b => `<option>${b}</option>`).join('');
+  
+  if(!fromOpts) return alert('Нет остатков для перемещения');
+
+  showModal(`Перемещение: ${c.model}`, `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label>Откуда</label><select id="trFrom">${fromOpts}</select></div>
+      <div><label>Куда</label><select id="trTo">${toOpts}</select></div>
+    </div>
+    <label>Количество</label><input type="number" id="trQty" value="1" min="1">
+  `, () => {
+    const f = document.getElementById('trFrom').value;
+    const t = document.getElementById('trTo').value;
+    const qty = parseInt(document.getElementById('trQty').value);
+    
+    if(f === t) return alert('Корпуса совпадают');
+    if(c.stocks[f] < qty) return alert('Недостаточно остатка');
+    
+    c.stocks[f] -= qty;
+    if(!c.stocks[t]) c.stocks[t] = 0;
+    c.stocks[t] += qty;
+    
+    log(`Перемещение: ${c.model}, ${qty} шт. ${f} -> ${t}`);
+    saveData();
+    renderCartRows();
+    closeModal();
+    toast('Перемещено');
+  });
+}
+
+/* --- ПОЛЬЗОВАТЕЛИ --- */
+
+function renderUsers(cont){
+  cont.innerHTML = `
+    <button class="btn" onclick="modalUser()">+ Добавить пользователя</button>
+    <table class="table" style="margin-top:15px">
+      <thead><tr><th>Логин</th><th>Имя</th><th>Роль</th><th>Действия</th></tr></thead>
+      <tbody id="uBody"></tbody>
+    </table>
+  `;
+  const tb = cont.querySelector('tbody');
+  users.forEach(u => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${u.login}</td>
+      <td>${u.name}</td>
+      <td>${u.role === 'admin' ? '<b style="color:var(--accent)">Админ</b>' : 'Пользователь'}</td>
+      <td>
+        <button class="btn ghost sm" onclick="modalUser(${u.id})">Ред.</button>
+        ${u.id !== 1 ? `<button class="btn ghost sm" style="color:var(--danger)" onclick="delUser(${u.id})">Удалить</button>` : ''}
+      </td>
+    `;
+    tb.appendChild(tr);
+  });
+}
+
+function modalUser(editId = null){
+  const user = editId ? users.find(u => u.id === editId) : {login:'', pass:'', name:'', role:'user'};
+  
+  showModal(editId ? 'Редактировать' : 'Новый пользователь', `
+    <label>Логин</label><input id="uLog" value="${user.login}">
+    <label>Пароль</label><input id="uPass" value="${user.pass}">
+    <label>Имя</label><input id="uName" value="${user.name}">
+    <label>Права</label>
+    <select id="uRole">
+      <option value="user" ${user.role==='user'?'selected':''}>Обычный пользователь</option>
+      <option value="admin" ${user.role==='admin'?'selected':''}>Администратор</option>
+    </select>
+  `, () => {
+    const login = document.getElementById('uLog').value;
+    const pass = document.getElementById('uPass').value;
+    const name = document.getElementById('uName').value;
+    const role = document.getElementById('uRole').value;
+    
+    if(!login || !pass) return alert('Заполните поля');
+
+    if(editId){
+      user.login = login; user.pass = pass; user.name = name; user.role = role;
+    } else {
+      if(users.some(x=>x.login === login)) return alert('Логин занят');
+      users.push({ id: Date.now(), login, pass, name, role });
+    }
+    
+    localStorage.setItem(LS_KEYS.USERS, JSON.stringify(users));
+    renderUsers(document.getElementById('mainContent'));
+    closeModal();
+  });
+}
+
+function delUser(id){
+  if(confirm('Удалить пользователя?')){
+    users = users.filter(u => u.id !== id);
+    localStorage.setItem(LS_KEYS.USERS, JSON.stringify(users));
+    renderUsers(document.getElementById('mainContent'));
+  }
+}
+
+/* --- ЖУРНАЛ И УТИЛИТЫ --- */
+function renderLogs(cont){
+  cont.innerHTML = logs.map(l => `<div style="padding:8px;border-bottom:1px solid rgba(255,255,255,0.05)">
+    <small style="color:var(--muted)">${l.date}</small> <b>${l.user}</b>: ${l.act}
+  </div>`).join('');
+}
+
+function log(act){
+  logs.unshift({ date: new Date().toLocaleString(), user: currentUser.login, act });
+  if(logs.length > 50) logs.pop();
+  localStorage.setItem(LS_KEYS.LOGS, JSON.stringify(logs));
+}
+
+function saveData(){
+  localStorage.setItem(LS_KEYS.CARTS, JSON.stringify(cartridges));
+}
+
+function showModal(title, content, onOk){
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalBody').innerHTML = content;
+  document.getElementById('modalOkBtn').onclick = onOk;
+  document.getElementById('modalRoot').style.display = 'flex';
+}
+function closeModal(){ document.getElementById('modalRoot').style.display = 'none'; }
+function toast(msg){
+  const t = document.createElement('div'); t.className='toast'; t.textContent=msg;
+  document.getElementById('toastArea').appendChild(t);
+  setTimeout(()=>t.remove(), 2000);
+}
+</script>
+</body>
+</html>
+
+```
